@@ -65,6 +65,7 @@ def status(root: Path) -> dict[str, list[str]]:
     committed = committed_snapshot(root)
     working = working_snapshot(root)
     staged_paths = sorted(path for path, digest in staged.items() if digest != committed.get(path))
+    committed_paths = sorted(committed)
     modified = sorted(
         path for path in working
         if path in staged and working[path] != staged[path]
@@ -72,4 +73,10 @@ def status(root: Path) -> dict[str, list[str]]:
     )
     deleted = sorted(path for path in set(committed) | set(staged) if path not in working)
     untracked = sorted(path for path in working if path not in committed and path not in staged)
-    return {"staged": staged_paths, "modified": modified, "deleted": deleted, "untracked": untracked}
+    return {
+        "staged": staged_paths,
+        "committed": committed_paths,
+        "modified": modified,
+        "deleted": deleted,
+        "untracked": untracked,
+    }
