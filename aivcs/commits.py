@@ -17,8 +17,10 @@ def create_commit(root: Path, message: str, author: str = "AIVCS User") -> dict:
     if changed_after_staging:
         raise RuntimeError("Working tree changed after staging: " + ", ".join(sorted(changed_after_staging)))
     parent = head_id(root)
+    parent_files = read_commit(root, parent).get("files", {}) if parent else {}
+    snapshot = {**parent_files, **index}
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    payload = f"{parent or ''}{message}{timestamp}{sorted(index.items())}".encode()
+    payload = f"{parent or ''}{message}{timestamp}{sorted(snapshot.items())}".encode()
     commit_id = hashlib.sha256(payload).hexdigest()[:12]
     for path, digest in index.items():
         source = root / path
@@ -27,7 +29,7 @@ def create_commit(root: Path, message: str, author: str = "AIVCS User") -> dict:
         destination = aivcs_path(root, OBJECTS_DIR, digest)
         if not destination.exists():
             destination.write_bytes(source.read_bytes())
-    commit = {"id": commit_id, "message": message, "timestamp": timestamp, "author": author, "parent": parent, "files": index}
+    commit = {"id": commit_id, "message": message, "timestamp": timestamp, "author": author, "parent": parent, "files": snapshot}
     write_json(aivcs_path(root, COMMITS_DIR, f"{commit_id}.json"), commit)
     update_head(root, commit_id)
     save_index(root, {})
@@ -41,9 +43,9 @@ def read_commit(root: Path, commit_id: str) -> dict:
     return read_json(path, {})  # type: ignore[return-value]
 
 
-def history(root: Path) -> list[dict]:
+def history(root: Path, commit_id: str | None = None) -> list[dict]:
     commits: list[dict] = []
-    current = head_id(root)
+    current = commit_id if commit_id is not None else head_id(root)
     while current:
         commit = read_commit(root, current)
         commits.append(commit)
