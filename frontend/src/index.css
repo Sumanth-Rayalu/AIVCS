@@ -1,2 +1,3 @@
 html { background: #0d1117; }
 #root { min-height: 100vh; }
+.page-header, .button { scroll-margin-top: 80px; }
