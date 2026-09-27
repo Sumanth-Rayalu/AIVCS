@@ -2,21 +2,29 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, GitBranch, LockKeyhole, Mail } from "lucide-react";
 
-export function AuthPage({ mode, onLogin, onRegister }) {
+export function AuthPage({ mode, onLogin, onRegister, initialError = "" }) {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isRegistering = mode === "register";
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
     setError("");
+    setIsSubmitting(true);
 
-    const result = isRegistering
-      ? onRegister({ username, email, password })
-      : onLogin({ email, password });
-    if (result) setError(result);
+    try {
+      const result = isRegistering
+        ? await onRegister({ username, email, password })
+        : await onLogin({ email, password });
+      if (result) setError(result);
+    } catch (requestError) {
+      setError(requestError.message || "Authentication failed.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -114,8 +122,13 @@ export function AuthPage({ mode, onLogin, onRegister }) {
             <button
               className="mt-1 flex h-10 items-center justify-center gap-2 rounded-[5px] border border-[#628f86] bg-[#47756d] text-xs font-semibold text-white hover:bg-[#54867c]"
               type="submit"
+              disabled={isSubmitting}
             >
-              {isRegistering ? "Create account" : "Sign in"}
+              {isSubmitting
+                ? "Please wait..."
+                : isRegistering
+                  ? "Create account"
+                  : "Sign in"}
               <ArrowRight size={15} />
             </button>
           </form>
