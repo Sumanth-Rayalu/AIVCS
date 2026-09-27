@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator 
 from aivcs.commits import create_commit, history, read_commit
 from aivcs.diff import build_diff, object_text
-from aivcs.repository import aivcs_path, find_root, head_id, init_repository
+from aivcs.repository import aivcs_path, branch_id, create_branch, current_branch, find_root, head_id, init_repository, list_branches, checkout_branch
 from aivcs.remotes import add_remote, list_remotes, pull, push, remove_remote
 from aivcs.staging import add, relative_files, status
 from backend.database import connection, initialize, user_row
@@ -184,31 +184,42 @@ def commit_diff(root: Path, commit_id: str) -> str:
     return "".join(chunks)
 
 
-def repository_payload(root: Path) -> dict[str, Any]:
+def repository_payload(root: Path, owner_id: int | None = None) -> dict[str, Any]:
     changes = status(root)
     commits = history(root)
     latest = commits[0] if commits else None
     description = ""
+    owner_username = None
+    resolved_owner_id = owner_id
     try:
         with connection() as db:
             cursor = db.cursor()
-            cursor.execute("SELECT description FROM repositories WHERE path = %s", (str(root),))
+            if owner_id is None:
+                cursor.execute(
+                    "SELECT r.description, r.owner_id, u.username FROM repositories r JOIN users u ON u.id = r.owner_id WHERE r.path = %s",
+                    (str(root),),
+                )
+            else:
+                cursor.execute(
+                    "SELECT r.description, r.owner_id, u.username FROM repositories r JOIN users u ON u.id = r.owner_id WHERE r.path = %s AND r.owner_id = %s",
+                    (str(root), owner_id),
+                )
             row = cursor.fetchone()
-            description = row[0] if row else ""
+            if row:
+                description, resolved_owner_id, owner_username = row
             cursor.close()
     except Exception:
         pass
+    name = root.name
+    clone_url = f"aivcs://{owner_username}/{name}" if owner_username else None
     return {
-        "name": root.name,
-        "path": str(root),
-        "description": description,
-        "branch": branch_name(root),
-        "head": head_id(root),
-        "files": relative_files(root),
-        "commits": commits,
-        "latest_commit": latest,
-        "status": changes,
-        "clean": not any(changes.values()),
+        "name": name, "path": str(root), "description": description,
+        "owner_id": resolved_owner_id, "owner": owner_username, "clone_url": clone_url,
+        "branch": current_branch(root) or "detached", "branches": [
+            {"name": branch, "head": branch_id(root, branch)} for branch in list_branches(root)
+        ],
+        "head": head_id(root), "files": relative_files(root), "commits": commits,
+        "latest_commit": latest, "status": changes, "clean": not any(changes.values()),
         "remotes": list_remotes(root),
         "stats": {"commits": len(commits), "files": len(relative_files(root)), "changes": sum(len(items) for items in changes.values())},
     }
@@ -337,10 +348,12 @@ def create_repository(request: RepositoryCreate, user: dict[str, Any] = Depends(
         (root / "README.md").write_text(f"# {request.name}\n\n{request.description}\n", encoding="utf-8")
     try:
         register_repository(user["id"], request.name, request.description, root)
+        set_config(root, "repository", {"name": request.name, "owner": user["username"], "owner_id": user["id"]})
+        add_remote(root, "origin", f"aivcs://{user['username']}/{request.name}")
     except Exception:
         shutil.rmtree(root, ignore_errors=True)
         raise
-    return repository_payload(root)
+    return repository_payload(root, owner_id=user["id"])
 
 
 @app.post("/api/repositories/import", status_code=201)
@@ -377,6 +390,8 @@ async def import_repository(
         raise
     add(root, ["."])
     register_repository(user["id"], name, description, root)
+    set_config(root, "repository", {"name": name, "owner": user["username"], "owner_id": user["id"]})
+    add_remote(root, "origin", f"aivcs://{user['username']}/{name}")
     return repository_payload(root, owner_id=user["id"])
 
 
@@ -458,6 +473,36 @@ def get_commit(name: str, commit_id: str, user: dict[str, Any] = Depends(authent
     return {**match, "diff": commit_diff(root, match["id"])}
 
 
+@app.get("/api/repositories/{name}/branches")
+def get_branches(name: str, user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, Any]:
+    root = named_repository(name, user["id"])
+    return {"current": current_branch(root), "branches": [{"name": b, "head": branch_id(root, b)} for b in list_branches(root)]}
+
+
+class BranchRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+@app.post("/api/repositories/{name}/branches")
+def create_repository_branch(name: str, request: BranchRequest, user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, Any]:
+    root = named_repository(name, user["id"])
+    try:
+        create_branch(root, request.name)
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"current": current_branch(root), "branches": [{"name": b, "head": branch_id(root, b)} for b in list_branches(root)]}
+
+
+@app.post("/api/repositories/{name}/branches/{branch_name}/checkout")
+def checkout_repository_branch(name: str, branch_name: str, user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, Any]:
+    root = named_repository(name, user["id"])
+    try:
+        checkout_branch(root, branch_name)
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return repository_payload(root, owner_id=user["id"])
+
+
 @app.get("/api/repositories/{name}/remote")
 def get_remote(name: str, user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, str]:
     return list_remotes(named_repository(name, user["id"]))
@@ -476,18 +521,18 @@ def delete_remote(name: str, remote_name: str, user: dict[str, Any] = Depends(au
 
 
 @app.post("/api/repositories/{name}/push")
-def push_repository(name: str, remote: str = "origin", user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, object]:
+def push_repository(name: str, remote: str = "origin", branch: str | None = None, user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, object]:
     try:
-        return push(named_repository(name, user["id"]), remote)
+        return push(named_repository(name, user["id"]), remote, branch)
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.post("/api/repositories/{name}/pull")
-def pull_repository(name: str, remote: str = "origin", user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, object]:
+def pull_repository(name: str, remote: str = "origin", branch: str | None = None, user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, object]:
     try:
         root = named_repository(name, user["id"])
-        result = pull(root, remote)
+        result = pull(root, remote, branch)
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     result["repository"] = repository_payload(root)
