@@ -52,11 +52,17 @@ export function Repository({
         branch.commits
           .reduce((fileMap, commit) => {
             (commit.fileDetails ?? []).forEach((file) => {
-              const name = `${file.filename}${file.fileextension}`;
+              const extension = file.fileextension ?? "";
+              const filename =
+                extension &&
+                file.filename.toLowerCase().endsWith(extension.toLowerCase())
+                  ? file.filename.slice(0, -extension.length)
+                  : file.filename;
+              const name = `${filename}${extension}`;
               fileMap.set(name, {
                 name,
-                filename: file.filename,
-                fileextension: file.fileextension,
+                filename,
+                fileextension: extension,
                 commit: commit.message,
                 time: new Date(commit.timestamp).toLocaleDateString(),
                 icon: FileCode2,

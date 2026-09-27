@@ -89,16 +89,15 @@ $env:MONGODB_DATABASE = "aivcs"
 python -m uvicorn backend.app:app --reload
 ```
 
-Configure the CLI and push a committed repository:
+Configure the CLI identity and the repository ID from your AIVCS account. The website continues to use email/password login; CLI remotes identify the account by username and email:
 
 ```powershell
-aivcs config email "user@example.com"
-aivcs config username "username"
-aivcs config password "password"
+aivcs config username "bob"
+aivcs config email "bob@example.com"
+aivcs config repo "demo"
 aivcs config backend-url "http://localhost:8000"
-aivcs push main
-aivcs push feature --repository demo
-aivcs clone demo copied-demo
 ```
 
-The backend URL is the placeholder for the deployed FastAPI service that connects to Atlas. This demo stores the password as supplied; use password hashing and HTTPS before treating it as production code.
+After committing locally, `aivcs push` pushes the current branch, while `aivcs push feature` pushes a chosen branch, including a newly created branch. If the configured repo ID exists for that user, push updates only that branch and preserves repository metadata and sibling branches. If it does not exist, push creates the repository record using the repo ID as its initial name. `aivcs pull` fast-forwards the current branch when the worktree is clean; `aivcs pull feature` selects and updates that branch. `aivcs clone demo copied-demo` downloads all branches, checks out `main` when present, and can also use the configured repo ID when the repository argument is omitted.
+
+The backend URL points to the FastAPI service connected to Atlas. CLI push and clone identify the account with username and email; the frontend account flow continues to authenticate with email and password.

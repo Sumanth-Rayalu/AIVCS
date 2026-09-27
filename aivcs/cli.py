@@ -5,9 +5,9 @@ from pathlib import Path
 
 from .branches import branch_names, create_branch, current_branch, switch_branch
 from .commits import create_commit, history, read_commit
-from .config import set_config
+from .config import remote_config, set_config
 from .diff import build_diff, object_text
-from .remote import clone, push
+from .remote import clone, pull, push
 from .repository import find_root, init_repository
 from .staging import add, status
 
@@ -72,16 +72,41 @@ def command_show(commit_id: str) -> None:
 
 
 def command_config(key: str, value: str) -> None:
-    allowed = {"email", "username", "password", "backend-url"}
+    allowed = {"email", "username", "repo", "backend-url"}
     if key not in allowed:
-        raise RuntimeError(f"Unknown config key: {key}. Choose email, username, password, or backend-url.")
+        raise RuntimeError(f"Unknown config key: {key}. Choose email, username, repo, or backend-url.")
     set_config(key.replace("-", "_"), value)
     print(f"Configured {key}.")
 
 
+def command_config_list() -> None:
+    config = remote_config()
+    print("AIVCS user configuration")
+    print(f"Username: {config['username'] or '(not set)'}")
+    print(f"Email: {config['email'] or '(not set)'}")
+
+
 def command_push(branch: str | None, repository: str) -> None:
-    result = push(find_root(), repository, branch)
+    root = find_root()
+    repository = repository or remote_config()["repo"] or root.name
+    result = push(root, repository, branch)
     print(result.get("message", "Pushed successfully."))
+
+
+def command_pull(branch: str | None, repository: str) -> None:
+    root = find_root()
+    repository = repository or remote_config()["repo"] or root.name
+    result = pull(root, repository, branch)
+    print(result.get("message", f"Pulled {repository} successfully."))
+
+
+def command_clone(repository: str | None, destination: str | None) -> None:
+    repository = repository or remote_config()["repo"]
+    if not repository:
+        raise RuntimeError('Configure a repository first: aivcs config repo "repository-id"')
+    target = Path(destination or repository)
+    clone(repository, target)
+    print(f"Cloned {repository} into {target}.")
 
 
 def command_branch(name: str | None) -> None:
@@ -118,13 +143,17 @@ def main() -> None:
     show_parser = subparsers.add_parser("show")
     show_parser.add_argument("commit")
     config_parser = subparsers.add_parser("config")
-    config_parser.add_argument("key", choices=("email", "username", "password", "backend-url"))
-    config_parser.add_argument("value")
+    config_parser.add_argument("--list", action="store_true", dest="list_config")
+    config_parser.add_argument("key", nargs="?", choices=("email", "username", "repo", "backend-url"))
+    config_parser.add_argument("value", nargs="?")
     push_parser = subparsers.add_parser("push")
     push_parser.add_argument("branch", nargs="?", default=None)
-    push_parser.add_argument("--repository", default="default")
+    push_parser.add_argument("--repository", default=None)
+    pull_parser = subparsers.add_parser("pull")
+    pull_parser.add_argument("branch", nargs="?", default=None)
+    pull_parser.add_argument("--repository", default=None)
     clone_parser = subparsers.add_parser("clone")
-    clone_parser.add_argument("repository")
+    clone_parser.add_argument("repository", nargs="?", default=None)
     clone_parser.add_argument("destination", nargs="?", default=None)
     branch_parser = subparsers.add_parser("branch")
     branch_parser.add_argument("name", nargs="?")
@@ -139,12 +168,19 @@ def main() -> None:
         elif args.command == "commit": command_commit(args.message)
         elif args.command == "log": command_log(args.oneline)
         elif args.command == "show": command_show(args.commit)
-        elif args.command == "config": command_config(args.key, args.value)
+        elif args.command == "config":
+            if args.list_config:
+                if args.key or args.value:
+                    parser.error("aivcs config --list cannot be combined with a key or value")
+                command_config_list()
+            elif not args.key or args.value is None:
+                parser.error("use aivcs config <key> <value> or aivcs config --list")
+            else:
+                command_config(args.key, args.value)
         elif args.command == "push": command_push(args.branch, args.repository)
+        elif args.command == "pull": command_pull(args.branch, args.repository)
         elif args.command == "clone":
-            destination = Path(args.destination or args.repository)
-            clone(args.repository, destination)
-            print(f"Cloned {args.repository} into {destination}.")
+            command_clone(args.repository, args.destination)
         elif args.command == "branch": command_branch(args.name)
         elif args.command == "switch": command_switch(args.name)
     except (RuntimeError, FileNotFoundError) as error:

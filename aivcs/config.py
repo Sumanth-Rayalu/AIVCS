@@ -35,6 +35,6 @@ def remote_config() -> dict[str, str]:
     return {
         "email": values.get("email", ""),
         "username": values.get("username", ""),
-        "password": values.get("password", ""),
+        "repo": values.get("repo", ""),
         "backend_url": values.get("backend_url", DEFAULT_BACKEND_URL).rstrip("/"),
     }

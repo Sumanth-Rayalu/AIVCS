@@ -222,11 +222,8 @@ def _ensure_demo_accounts(collection) -> None:
 				)
 			continue
 		demo_document = {
-			"email": demo["email"],
-			"username": demo["username"],
+			**demo["userData"],
 			"password": demo["password"],
-			"createdAt": demo["userData"]["createdAt"],
-			"userData": demo["userData"],
 		}
 		try:
 			collection.insert_one(demo_document)
@@ -331,13 +328,7 @@ def register(payload: RegisterRequest) -> dict[str, Any]:
 		"noOfCommits": 0,
 		"repositories": [],
 	}
-	account = {
-		"email": email,
-		"username": username,
-		"password": payload.password,
-		"createdAt": created_at,
-		"userData": user_data,
-	}
+	account = {**user_data, "password": payload.password}
 	try:
 		collection.insert_one(account)
 	except DuplicateKeyError as error:
@@ -402,7 +393,21 @@ def update_user_data(
 	)
 	data.setdefault("createdAt", account.get("createdAt", datetime.now(timezone.utc).isoformat()))
 	account_collection().update_one(
-		{"_id": account["_id"]}, {"$set": {"userData": data, "repositories": repositories}}
+		{"_id": account["_id"]},
+		{
+			"$set": {
+				key: data[key]
+				for key in (
+					"email",
+					"username",
+					"createdAt",
+					"noOfRepositories",
+					"noOfCommits",
+					"repositories",
+				)
+			},
+			"$unset": {"userData": ""},
+		},
 	)
 	return {"userData": data}
 
@@ -410,15 +415,15 @@ def update_user_data(
 @app.post("/repositories/{repository}/push")
 def push_repository(repository: str, payload: dict[str, Any]) -> dict[str, Any]:
 	username = payload.get("username")
-	password = payload.get("password")
-	if not username or not password:
-		raise HTTPException(status_code=401, detail="Username and password are required")
-
-	collection = repository_collection()
-	current = collection.find_one({"username": username})
-	if current and current.get("password") != password:
-		raise HTTPException(status_code=401, detail="Invalid username or password")
-	repositories = list(current.get("repositories", [])) if current else []
+	email = payload.get("email")
+	if not username or not email:
+		raise HTTPException(status_code=401, detail="Username and email are required")
+	collection = account_collection()
+	current = collection.find_one({"username": username.strip(), "email": _normalize_email(email)})
+	if not current:
+		raise HTTPException(status_code=404, detail="AIVCS account not found")
+	user_data = _user_data(current)
+	repositories = list(user_data.get("repositories", []))
 	pushed = _repository_from_payload(payload, repository)
 	existing_repository = next(
 		(item for item in repositories if item.get("repositoryId") == repository),
@@ -428,27 +433,55 @@ def push_repository(repository: str, payload: dict[str, Any]) -> dict[str, Any]:
 	for pushed_branch in pushed["branches"]:
 		branches = [item for item in branches if item.get("branchName") != pushed_branch["branchName"]]
 		branches.append(pushed_branch)
-	merged_repository = {"repositoryId": repository, "branches": branches}
+	merged_repository = {
+		**(existing_repository or {}),
+		"repositoryId": repository,
+		"repositoryName": (existing_repository or {}).get("repositoryName")
+			or pushed.get("repositoryName")
+			or repository,
+		"description": (existing_repository or {}).get("description")
+			or pushed.get("description", ""),
+		"branches": branches,
+	}
 	repositories = [item for item in repositories if item.get("repositoryId") != repository]
 	repositories.append(merged_repository)
-	document = {
-		"email": payload.get("email", current.get("email", "") if current else ""),
-		"username": username,
-		"password": password,
-		"createdAt": current.get("createdAt") if current else datetime.now(timezone.utc).isoformat(),
-		"repositories": repositories,
-	}
-	collection.replace_one({"username": username}, document, upsert=True)
+	user_data["repositories"] = repositories
+	user_data["noOfRepositories"] = len(repositories)
+	user_data["noOfCommits"] = sum(
+		len(branch.get("commits", []))
+		for item in repositories
+		for branch in item.get("branches", [])
+		if isinstance(branch, dict) and isinstance(branch.get("commits", []), list)
+	)
+	collection.update_one(
+		{"_id": current["_id"]},
+		{"$set": {
+			key: user_data[key]
+			for key in (
+				"email",
+				"username",
+				"createdAt",
+				"noOfRepositories",
+				"noOfCommits",
+				"repositories",
+			)
+		}, "$unset": {"userData": ""}},
+	)
 	return {"message": f"Pushed {repository} successfully.", "repositoryId": repository}
 
 
 @app.get("/repositories/{repository}/clone")
-def clone_repository(repository: str, username: str, password: str) -> dict[str, Any]:
-	document = repository_collection().find_one({"username": username, "password": password})
+def clone_repository(repository: str, username: str = "", email: str = "") -> dict[str, Any]:
+	if not username or not email:
+		raise HTTPException(status_code=401, detail="Username and email are required")
+	document = account_collection().find_one({
+		"username": username.strip(),
+		"email": _normalize_email(email),
+	})
 	if not document:
-		raise HTTPException(status_code=401, detail="Invalid username or password")
+		raise HTTPException(status_code=404, detail="AIVCS account not found")
 	repository_data = next(
-		(item for item in document.get("repositories", []) if item.get("repositoryId") == repository),
+		(item for item in _user_data(document).get("repositories", []) if item.get("repositoryId") == repository),
 		None,
 	)
 	if not repository_data:
