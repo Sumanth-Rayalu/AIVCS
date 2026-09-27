@@ -1,2 +1,37 @@
-html { background: #0d1117; }
-#root { min-height: 100vh; }
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+html {
+  background: #0d1117;
+}
+
+@layer base {
+  :root {
+    font-family: "DM Sans", sans-serif;
+    color: #f0f6fc;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-width: 320px;
+    margin: 0;
+    background: #0d1117;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+
+  button {
+    color: inherit;
+    cursor: pointer;
+  }
+}
+
+#root {
+  min-height: 100vh;
+}
