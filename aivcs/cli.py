@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from .branches import branch_names, create_branch, current_branch, switch_branch
 from .commits import create_commit, history, read_commit
@@ -100,10 +101,51 @@ def command_pull(branch: str | None, repository: str) -> None:
     print(result.get("message", f"Pulled {repository} successfully."))
 
 
+def _parse_clone_url(value: str) -> tuple[str, str, str] | None:
+    if not value.startswith(("http://", "https://")):
+        return None
+
+    try:
+        parsed = urlsplit(value)
+    except ValueError as error:
+        raise RuntimeError("Invalid AIVCS clone URL.") from error
+    parts = parsed.path.split("/")
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc.lower() != "aivcs"
+        or parsed.query
+        or parsed.fragment
+        or len(parts) != 4
+        or parts[0] != ""
+        or any(not part for part in parts[1:])
+    ):
+        raise RuntimeError(
+            "Invalid AIVCS clone URL. Expected https://aivcs/<email>/<username>/<repository>."
+        )
+
+    email_prefix, username, repository = (unquote(part) for part in parts[1:])
+    if any(
+        not part or "/" in part or "\\" in part
+        for part in (email_prefix, username, repository)
+    ) or "@" in email_prefix:
+        raise RuntimeError("Invalid AIVCS clone URL components.")
+    return email_prefix, username, repository
+
+
 def command_clone(repository: str | None, destination: str | None) -> None:
+    if repository:
+        share_details = _parse_clone_url(repository)
+        if share_details:
+            email_prefix, username, repository = share_details
+            set_config("email", f"{email_prefix}@gmail.com")
+            set_config("username", username)
+            set_config("repo", repository)
+
     repository = repository or remote_config()["repo"]
     if not repository:
-        raise RuntimeError('Configure a repository first: aivcs config repo "repository-id"')
+        raise RuntimeError(
+            'Provide a clone URL or configure a repository first: aivcs config repo "repository-id"'
+        )
     target = Path(destination or repository)
     clone(repository, target)
     print(f"Cloned {repository} into {target}.")

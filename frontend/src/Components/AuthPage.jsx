@@ -28,7 +28,7 @@ export function AuthPage({ mode, onLogin, onRegister, initialError = "" }) {
   };
 
   return (
-    <main className="relative grid min-h-screen overflow-hidden bg-[#0d1117] text-[#f0f6fc] lg:grid-cols-[1fr_440px]">
+    <main className="relative grid min-h-screen overflow-hidden bg-[#0d1117] text-[#f0f6fc] lg:grid-cols-[minmax(0,1fr)_minmax(520px,38vw)]">
       <section className="relative flex min-h-[34vh] flex-col justify-between overflow-hidden border-b border-[#30363d] px-7 py-8 sm:px-12 sm:py-10 lg:min-h-screen lg:border-r lg:border-b-0 lg:px-[9vw] lg:py-[9vh]">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_18%_22%,rgba(65,108,125,0.2),transparent_42%),linear-gradient(145deg,#111b20_0%,#0d1117_58%,#151725_100%)]" />
         <div className="relative flex items-center gap-3">
@@ -50,12 +50,12 @@ export function AuthPage({ mode, onLogin, onRegister, initialError = "" }) {
         </div>
         <div className="relative mt-10 flex items-center gap-2 text-[10px] text-[#6e7b85] lg:mt-0">
           <span className="h-1.5 w-1.5 rounded-full bg-[#79c5a7]" />
-          Local demo workspace
+          Version control workspace
         </div>
       </section>
 
       <section className="flex items-center justify-center px-5 py-10 sm:px-10 lg:min-h-screen">
-        <div className="w-full max-w-[360px]">
+        <div className="w-full max-w-[420px]">
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-[1.6px] text-[#86c6bd]">
             {isRegistering ? "Create your workspace" : "Welcome back"}
           </p>
@@ -65,7 +65,7 @@ export function AuthPage({ mode, onLogin, onRegister, initialError = "" }) {
           <p className="mt-2 text-xs text-[#8b949e]">
             {isRegistering
               ? "Your repositories will be saved to this account."
-              : "Use a demo account or register to get started."}
+              : "Sign in to continue to your repositories."}
           </p>
 
           <form className="mt-7 grid gap-4" onSubmit={submit}>
@@ -132,14 +132,6 @@ export function AuthPage({ mode, onLogin, onRegister, initialError = "" }) {
               <ArrowRight size={15} />
             </button>
           </form>
-
-          {!isRegistering && (
-            <div className="mt-6 border-t border-[#30363d] pt-4 text-[10px] leading-5 text-[#8b949e]">
-              <p className="m-0 font-semibold text-[#c9d1d9]">Demo accounts</p>
-              <p className="m-0">bob@example.com / bob-password</p>
-              <p className="m-0">alice@example.com / alice-password</p>
-            </div>
-          )}
 
           <p className="mt-6 text-center text-[11px] text-[#8b949e]">
             {isRegistering ? "Already have an account?" : "New to AIVCS?"}{" "}

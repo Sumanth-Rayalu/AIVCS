@@ -1,19 +1,40 @@
+import io
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from aivcs.branches import create_branch, switch_branch
 from aivcs.commits import create_commit
 from aivcs.config import set_config
 from aivcs.hashing import hash_bytes
-from aivcs.remote import build_push_payload, clone, pull
+from aivcs.remote import _request, build_push_payload, clone, pull
 from aivcs.repository import BRANCHES_DIR, HEAD_FILE, aivcs_path, init_repository
 from aivcs.staging import add
 
 
 class RemotePayloadTests(unittest.TestCase):
+    def test_account_not_found_error_is_actionable_and_hides_raw_json(self) -> None:
+        error = HTTPError(
+            "http://localhost:8000/repositories/demo/push",
+            404,
+            "Not Found",
+            {},
+            io.BytesIO(b'{"detail":"AIVCS account not found"}'),
+        )
+
+        with patch("aivcs.remote.urlopen", side_effect=error):
+            with self.assertRaises(RuntimeError) as raised:
+                _request("POST", "http://localhost:8000/repositories/demo/push", {})
+
+        message = str(raised.exception)
+        self.assertIn("No AIVCS account matches", message)
+        self.assertIn("aivcs config username", message)
+        self.assertIn("aivcs config email", message)
+        self.assertNotIn('{"detail"', message)
+
     def test_push_payload_matches_repository_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as config_dir:
             root = Path(directory)

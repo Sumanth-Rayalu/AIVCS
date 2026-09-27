@@ -12,6 +12,24 @@ from aivcs.config import load_config, set_config
 
 
 class ConfigListTests(unittest.TestCase):
+    def test_clone_share_url_configures_identity_and_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            with (
+                patch.dict(os.environ, {"AIVCS_CONFIG": str(config_path)}),
+                patch.object(cli, "clone") as clone,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                set_config("backend_url", "http://backend.example.test")
+                cli.command_clone("https://aivcs/bob/alice/demo-repo", None)
+                saved_config = load_config()
+
+        self.assertEqual(saved_config["email"], "bob@gmail.com")
+        self.assertEqual(saved_config["username"], "alice")
+        self.assertEqual(saved_config["repo"], "demo-repo")
+        self.assertEqual(saved_config["backend_url"], "http://backend.example.test")
+        clone.assert_called_once_with("demo-repo", Path("demo-repo"))
+
     def test_push_and_pull_default_repository_to_worktree_directory(self) -> None:
         root = Path("/projects/sample-app")
         with (

@@ -33,6 +33,9 @@ export function Repository({
   const repository = repositories.find(
     (item) => item.repositoryId === selectedRepositoryId,
   );
+  const cloneUrl = repository
+    ? `aivcs clone https://aivcs/${encodeURIComponent(userData.email?.split("@")[0] ?? "")}/${encodeURIComponent(userData.username)}/${encodeURIComponent(repository.repositoryId)}`
+    : "";
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isEditingFile, setIsEditingFile] = useState(false);
@@ -526,6 +529,12 @@ export function Repository({
               </pre>
             </div>
           </section> */}
+          <div className="mt-4 grid min-w-0 gap-1.5 border-t border-[#30363d] py-3">
+            <span className="text-[10px] text-[#8b949e]">Clone command</span>
+            <code className="block overflow-x-auto whitespace-nowrap rounded-[5px] border border-[#30363d] bg-[#0d1117] px-3 py-2 font-mono text-[11px] text-[#c9d1d9]">
+              {cloneUrl}
+            </code>
+          </div>
         </>
       )}
     </>

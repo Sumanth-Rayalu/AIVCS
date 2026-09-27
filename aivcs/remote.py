@@ -86,8 +86,24 @@ def _request(method: str, url: str, payload: dict | None = None) -> dict:
         with urlopen(request, timeout=15) as response:
             result = json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Backend request failed ({error.code}): {detail}") from error
+        body = error.read().decode("utf-8", errors="replace")
+        try:
+            error_payload = json.loads(body)
+        except json.JSONDecodeError:
+            error_payload = {}
+        detail = error_payload.get("detail") if isinstance(error_payload, dict) else None
+        if detail == "AIVCS account not found":
+            message = (
+                "No AIVCS account matches the configured username and email. "
+                "Check them with `aivcs config --list`, then update them using "
+                '`aivcs config username "..."` and `aivcs config email "..."`. '
+                "Retry the command after correcting the account settings."
+            )
+        elif isinstance(detail, str) and detail:
+            message = f"Request failed (HTTP {error.code}): {detail}"
+        else:
+            message = f"The backend could not complete the request (HTTP {error.code})."
+        raise RuntimeError(message) from error
     except URLError as error:
         raise RuntimeError(f"Could not connect to backend at {url}: {error.reason}") from error
     if not isinstance(result, dict):
