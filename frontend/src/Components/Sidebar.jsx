@@ -20,7 +20,7 @@ export function Sidebar({
   const navItems = [
     ["overview", "Overview", LayoutDashboard],
     ["repository", "Repositories", Code2],
-    ["ai-history", "AI History", Sparkles],
+    // ["ai-history", "AI History", Sparkles],
     // ["issues", "Issues", CircleDot],
     // ["pulls", "Pull requests", GitPullRequest],
   ];

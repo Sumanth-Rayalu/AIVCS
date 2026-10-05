@@ -1,35 +1,58 @@
-# AIVCS repository state and local test scratch data
-.aivcs/
-smoke-work/
+# ==============================================================================
+# AIVCS Root .gitignore
+# ==============================================================================
 
-# Python caches, environments, tests, and build artifacts
+# ------------------------------------------------------------------------------
+# 1. SECRETS / ENVIRONMENT FILES
+# Prevent leaking API keys, database credentials, passwords, and tokens
+# ------------------------------------------------------------------------------
+.env
+.env.*
+*.env
+!.env.example
+!.env.template
+!backend/.env.example
+backend/atlas-credentials.env
+
+# ------------------------------------------------------------------------------
+# 2. PYTHON GENERATED FILES & CACHES
+# ------------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
 .pytest_cache/
 .mypy_cache/
-.pyright/
 .ruff_cache/
+.pyright/
 .coverage
 .coverage.*
 htmlcov/
+
+# ------------------------------------------------------------------------------
+# 3. VIRTUAL ENVIRONMENTS
+# ------------------------------------------------------------------------------
 .venv/
 venv/
-ENV/
 env/
-build/
-dist/
-*.egg-info/
-*.egg
+ENV/
 
-# Python and backend local configuration
-.env
-.env.*
-!.env.example
-backend/atlas-credentials.env
-
-# Node, Vite, and frontend build artifacts
+# ------------------------------------------------------------------------------
+# 4. NODE / FRONTEND GENERATED FILES
+# ------------------------------------------------------------------------------
 node_modules/
+.npm/
+.yarn/
+.pnpm-store/
+.next/
+.vite/
+coverage/
 frontend/dist/
 frontend/dist-ssr/
 frontend/.vite/
@@ -41,31 +64,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-*.local
 
-# Runtime logs and local databases
-*.log
-*.sqlite
-*.sqlite3
-*.db
-
-# Native build outputs
-*.o
-*.obj
-*.a
-*.lib
-*.so
-*.dll
-*.dylib
-*.exe
-
-# Operating-system files
-.DS_Store
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Editor and IDE files
+# ------------------------------------------------------------------------------
+# 5. IDE / EDITOR FILES
+# User-specific and generated editor settings
+# ------------------------------------------------------------------------------
 .idea/
 .vscode/*
 !.vscode/extensions.json
@@ -77,5 +80,85 @@ Desktop.ini
 *.sln
 *.njsproj
 *.ntvs*
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
+# ------------------------------------------------------------------------------
+# 6. AIVCS LOCAL REPOSITORY DATA
+# Internal repository metadata, objects, indices, and staging (must not be committed)
+# ------------------------------------------------------------------------------
+.aivcs/
+
+# ------------------------------------------------------------------------------
+# 7. LOCAL AIVCS TEST REPOSITORIES & SCRATCH WORKSPACES
+# Do not commit temporary test repositories created during local runs
+# ------------------------------------------------------------------------------
+full test/
+test-repo/
+test_repo/
+aivcs-test/
+aivcs-tests/
+aivcs-workspace/
+smoke-work/
 checkaivcs/
+tmp/
+temp/
+firest/
+
+# ------------------------------------------------------------------------------
+# 8. LOGS / TEMPORARY FILES
+# ------------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.cache
+*.bak
+*.local
+
+# ------------------------------------------------------------------------------
+# 9. DATABASE / LOCAL DEVELOPMENT FILES
+# Local database files and dumps (preserve explicit schema/migration definitions)
+# ------------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+*.local_db.json
+.local_db.json
+!schema/*.sql
+!migrations/*.sql
+!backend/schema/*.sql
+!backend/migrations/*.sql
+
+# ------------------------------------------------------------------------------
+# 10. GENERATED TEST OUTPUT & REPORTS
+# ------------------------------------------------------------------------------
+test-results/
+reports/
+screenshots/
+*.out
+
+# ------------------------------------------------------------------------------
+# 11. COMPILED BINARIES & EXECUTABLES
+# ------------------------------------------------------------------------------
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.dylib
+*.exe
+
+
+# Private keys / certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# OS / local environment
+*.pid
+*.pid.lock

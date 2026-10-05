@@ -1,7 +1,9 @@
 import hashlib
+import json
 import os
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -9,17 +11,30 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from pymongo import MongoClient
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
+load_dotenv(BACKEND_DIR / ".env", override=True)
 load_dotenv(BACKEND_DIR / "atlas-credentials.env", override=False)
-load_dotenv(BACKEND_DIR / ".env", override=False)
 
 app = FastAPI(title="AIVCS backend")
+
+
+@app.exception_handler(PyMongoError)
+async def pymongo_exception_handler(_request, exc: PyMongoError):
+	return JSONResponse(
+		status_code=503,
+		content={
+			"detail": f"Database error: {exc}. Please verify MongoDB Atlas Network Access (IP whitelist) and credentials."
+		},
+	)
+
+
 app.add_middleware(
 	CORSMiddleware,
 	allow_origins=[
@@ -33,7 +48,149 @@ app.add_middleware(
 	allow_methods=["*"],
 	allow_headers=["*"],
 )
+class LocalCollection:
+	def __init__(self, name: str, db: "LocalDatabase"):
+		self.name = name
+		self.db = db
+		self.indexes: list[dict[str, Any]] = []
+
+	def create_index(self, key: str, unique: bool = False, sparse: bool = False, expireAfterSeconds: int | None = None) -> str:
+		self.indexes.append({"key": key, "unique": unique, "sparse": sparse})
+		return key
+
+	def _matches(self, doc: dict[str, Any], query: dict[str, Any]) -> bool:
+		for k, v in query.items():
+			doc_val = doc.get(k)
+			if isinstance(v, dict):
+				for op, op_val in v.items():
+					if op == "$gt":
+						dv = doc_val
+						ov = op_val
+						if isinstance(dv, str):
+							try:
+								dv = datetime.fromisoformat(dv)
+							except Exception:
+								pass
+						if isinstance(ov, str):
+							try:
+								ov = datetime.fromisoformat(ov)
+							except Exception:
+								pass
+						if dv is None or dv <= ov:
+							return False
+					elif op == "$lt":
+						dv = doc_val
+						ov = op_val
+						if isinstance(dv, str):
+							try:
+								dv = datetime.fromisoformat(dv)
+							except Exception:
+								pass
+						if isinstance(ov, str):
+							try:
+								ov = datetime.fromisoformat(ov)
+							except Exception:
+								pass
+						if dv is None or dv >= ov:
+							return False
+					else:
+						return False
+			else:
+				if k == "_id":
+					if str(doc_val) != str(v):
+						return False
+				elif doc_val != v:
+					return False
+		return True
+
+	def find_one(self, query: dict[str, Any] | None = None) -> dict[str, Any] | None:
+		query = query or {}
+		docs = self.db._data.setdefault(self.name, [])
+		for d in docs:
+			if self._matches(d, query):
+				return dict(d)
+		return None
+
+	def insert_one(self, doc: dict[str, Any]):
+		docs = self.db._data.setdefault(self.name, [])
+		item = dict(doc)
+		if "_id" not in item:
+			item["_id"] = secrets.token_hex(12)
+		for idx in self.indexes:
+			if idx.get("unique"):
+				key = idx["key"]
+				val = item.get(key)
+				if val is not None or not idx.get("sparse"):
+					for existing in docs:
+						if existing.get(key) == val and val is not None:
+							raise DuplicateKeyError(f"Duplicate key for index {key}: {val}")
+		docs.append(item)
+		self.db._save()
+		return type("InsertResult", (), {"inserted_id": item["_id"]})()
+
+	def update_one(self, query: dict[str, Any], update: dict[str, Any]):
+		docs = self.db._data.setdefault(self.name, [])
+		for item in docs:
+			if self._matches(item, query):
+				if "$set" in update:
+					for k, v in update["$set"].items():
+						item[k] = v
+				if "$unset" in update:
+					for k in update["$unset"]:
+						item.pop(k, None)
+				self.db._save()
+				return type("UpdateResult", (), {"modified_count": 1})()
+		return type("UpdateResult", (), {"modified_count": 0})()
+
+	def delete_one(self, query: dict[str, Any]):
+		docs = self.db._data.setdefault(self.name, [])
+		for idx, item in enumerate(docs):
+			if self._matches(item, query):
+				docs.pop(idx)
+				self.db._save()
+				return type("DeleteResult", (), {"deleted_count": 1})()
+		return type("DeleteResult", (), {"deleted_count": 0})()
+
+
+class LocalDatabase:
+	def __init__(self, filepath: Path | None = None):
+		self.filepath = filepath
+		self._data: dict[str, list[dict[str, Any]]] = {}
+		self._load()
+
+	def _load(self) -> None:
+		if self.filepath and self.filepath.exists():
+			try:
+				with open(self.filepath, "r", encoding="utf-8") as f:
+					self._data = json.load(f)
+			except Exception:
+				self._data = {}
+
+	def _save(self) -> None:
+		if self.filepath:
+			try:
+				def default_json(obj: Any) -> str:
+					if isinstance(obj, datetime):
+						return obj.isoformat()
+					return str(obj)
+
+				with open(self.filepath, "w", encoding="utf-8") as f:
+					json.dump(self._data, f, indent=2, default=default_json)
+			except Exception as exc:
+				print(f"[AIVCS] Warning: could not persist local db: {exc}")
+
+	def __getitem__(self, name: str) -> LocalCollection:
+		return LocalCollection(name, self)
+
+	def __getattr__(self, name: str) -> LocalCollection:
+		return self[name]
+
+
 _client: MongoClient | None = None
+_client_uri: str | None = None
+_atlas_available: bool | None = None
+_last_atlas_check: float = 0.0
+_local_db: LocalDatabase | None = None
 _security = HTTPBearer(auto_error=False)
 _SESSION_DAYS = 14
 
@@ -49,35 +206,85 @@ class LoginRequest(BaseModel):
 	password: str = Field(min_length=1, max_length=256)
 
 
+def _get_local_db() -> LocalDatabase:
+	global _local_db
+	if _local_db is None:
+		_local_db = LocalDatabase(BACKEND_DIR / ".local_db.json")
+	return _local_db
+
+
 def _database():
-	global _client
+	global _client, _client_uri, _atlas_available, _last_atlas_check
+	load_dotenv(BACKEND_DIR / ".env", override=True)
+	load_dotenv(BACKEND_DIR / "atlas-credentials.env", override=False)
+
+	if os.environ.get("USE_LOCAL_DB", "").lower() in ("true", "1", "yes"):
+		return _get_local_db()
+
 	uri = os.environ.get("MONGODB_URI")
 	if not uri:
-		raise HTTPException(status_code=500, detail="MONGODB_URI is not configured")
-	if _client is None:
-		_client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-	database_name = os.environ.get("MONGODB_DATABASE") or os.environ.get("DB_NAME", "aivcs")
-	return _client[database_name]
+		return _get_local_db()
+
+	now = time.time()
+	if _atlas_available is False and (now - _last_atlas_check < 30.0):
+		return _get_local_db()
+
+	try:
+		if _client is None or _client_uri != uri:
+			_client = MongoClient(uri, serverSelectionTimeoutMS=2000)
+			_client_uri = uri
+		_client.admin.command("ping")
+		_atlas_available = True
+		_last_atlas_check = now
+		database_name = os.environ.get("MONGODB_DATABASE") or os.environ.get("DB_NAME", "aivcs")
+		return _client[database_name]
+	except Exception as exc:
+		_atlas_available = False
+		_last_atlas_check = now
+		print(f"[AIVCS] Notice: MongoDB Atlas unavailable ({exc}). Using local database.")
+		return _get_local_db()
 
 
 def repository_collection():
-	collection = _database().repositories
-	collection.create_index("username", unique=True)
-	return collection
+	try:
+		collection = _database().repositories
+		collection.create_index("username", unique=True)
+		return collection
+	except PyMongoError:
+		global _atlas_available
+		_atlas_available = False
+		collection = _get_local_db().repositories
+		collection.create_index("username", unique=True)
+		return collection
 
 
 def account_collection():
 	collection_name = os.environ.get("MONGODB_USERS_COLLECTION", "userdata")
-	collection = _database()[collection_name]
-	collection.create_index("email", unique=True, sparse=True)
-	return collection
+	try:
+		collection = _database()[collection_name]
+		collection.create_index("email", unique=True, sparse=True)
+		return collection
+	except PyMongoError:
+		global _atlas_available
+		_atlas_available = False
+		collection = _get_local_db()[collection_name]
+		collection.create_index("email", unique=True, sparse=True)
+		return collection
 
 
 def session_collection():
-	collection = _database().sessions
-	collection.create_index("tokenHash", unique=True)
-	collection.create_index("expiresAt", expireAfterSeconds=0)
-	return collection
+	try:
+		collection = _database().sessions
+		collection.create_index("tokenHash", unique=True)
+		collection.create_index("expiresAt", expireAfterSeconds=0)
+		return collection
+	except PyMongoError:
+		global _atlas_available
+		_atlas_available = False
+		collection = _get_local_db().sessions
+		collection.create_index("tokenHash", unique=True)
+		collection.create_index("expiresAt", expireAfterSeconds=0)
+		return collection
 
 
 def _normalize_email(email: str) -> str:

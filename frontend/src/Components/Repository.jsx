@@ -52,30 +52,30 @@ export function Repository({
     ) ?? repository?.branches?.[0];
   const files = branch?.commits
     ? Array.from(
-        branch.commits
-          .reduce((fileMap, commit) => {
-            (commit.fileDetails ?? []).forEach((file) => {
-              const extension = file.fileextension ?? "";
-              const filename =
-                extension &&
+      branch.commits
+        .reduce((fileMap, commit) => {
+          (commit.fileDetails ?? []).forEach((file) => {
+            const extension = file.fileextension ?? "";
+            const filename =
+              extension &&
                 file.filename.toLowerCase().endsWith(extension.toLowerCase())
-                  ? file.filename.slice(0, -extension.length)
-                  : file.filename;
-              const name = `${filename}${extension}`;
-              fileMap.set(name, {
-                name,
-                filename,
-                fileextension: extension,
-                commit: commit.message,
-                time: new Date(commit.timestamp).toLocaleDateString(),
-                icon: FileCode2,
-                content: file.content,
-              });
+                ? file.filename.slice(0, -extension.length)
+                : file.filename;
+            const name = `${filename}${extension}`;
+            fileMap.set(name, {
+              name,
+              filename,
+              fileextension: extension,
+              commit: commit.message,
+              time: new Date(commit.timestamp).toLocaleDateString(),
+              icon: FileCode2,
+              content: file.content,
             });
-            return fileMap;
-          }, new Map())
-          .values(),
-      )
+          });
+          return fileMap;
+        }, new Map())
+        .values(),
+    )
     : [];
   useEffect(() => {
     setSelectedFile(null);
@@ -312,10 +312,10 @@ export function Repository({
                 <Plus size={15} />
                 Add file <ChevronDown size={14} />
               </Button>
-              <Button primary onClick={onAI}>
+              {/* <Button primary onClick={onAI}>
                 <Sparkles size={15} />
                 AI commit
-              </Button>
+              </Button> */}
             </div>
           </div>
           {isAddingFile && (

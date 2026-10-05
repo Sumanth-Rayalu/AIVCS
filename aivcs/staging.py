@@ -6,7 +6,7 @@ from pathlib import Path
 from .hashing import hash_file
 from .repository import INDEX_FILE, aivcs_path, head_id, read_json, write_json
 
-IGNORED_NAMES = {".aivcs", ".git", ".env", "__pycache__", "node_modules"}
+IGNORED_NAMES = {".aivcs", ".git", ".env", "__pycache__", "node_modules", ".venv", "venv", "dist"}
 
 
 def relative_files(root: Path) -> list[str]:

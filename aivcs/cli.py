@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from .ai.agent import (
+    run_ai_assistant,
+    run_ai_commit,
+    run_ai_diff,
+    run_ai_explain,
+    run_ai_fix,
+    run_ai_merge,
+    run_ai_review,
+    run_ai_search,
+    run_ai_status,
+)
 from .branches import branch_names, create_branch, current_branch, switch_branch
 from .commits import create_commit, history, read_commit
 from .config import remote_config, set_config
@@ -169,7 +181,63 @@ def command_switch(name: str) -> None:
     print(f"Switched to branch '{name}'.")
 
 
-def main() -> None:
+def command_ai_commit() -> None:
+    run_ai_commit(find_root())
+
+
+def command_ai_diff(staged: bool = False) -> None:
+    run_ai_diff(find_root(), staged=staged)
+
+
+def command_ai_explain(target: str | None = None) -> None:
+    run_ai_explain(find_root(), target=target)
+
+
+def command_ai_status() -> None:
+    run_ai_status(find_root())
+
+
+def command_ai_search(query: str) -> None:
+    run_ai_search(find_root(), query=query)
+
+
+def command_ai_review(staged: bool = False) -> None:
+    run_ai_review(find_root(), staged=staged)
+
+
+def command_ai_fix(target_file: str | None = None) -> None:
+    run_ai_fix(find_root(), target_file=target_file)
+
+
+def command_ai_merge(branch: str) -> None:
+    run_ai_merge(find_root(), target_branch=branch)
+
+
+def command_ai_assistant(prompt: str | None = None) -> None:
+    run_ai_assistant(find_root(), prompt=prompt)
+
+
+def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Support natural queries: `aivcs ai <prompt...>` -> `aivcs ai ask <prompt...>`
+    known_ai_cmds = {
+        "commit",
+        "diff",
+        "explain",
+        "status",
+        "search",
+        "review",
+        "fix",
+        "merge",
+        "ask",
+        "-h",
+        "--help",
+    }
+    if len(argv) >= 2 and argv[0] == "ai" and argv[1] not in known_ai_cmds and not argv[1].startswith("-"):
+        argv = ["ai", "ask", *argv[1:]]
+
     parser = argparse.ArgumentParser(prog="aivcs", description="AI-native version control, Phase 1 core")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init")
@@ -197,11 +265,31 @@ def main() -> None:
     clone_parser = subparsers.add_parser("clone")
     clone_parser.add_argument("repository", nargs="?", default=None)
     clone_parser.add_argument("destination", nargs="?", default=None)
+
+    ai_parser = subparsers.add_parser("ai", help="AI assistant and intelligence tools")
+    ai_subparsers = ai_parser.add_subparsers(dest="ai_command")
+    ai_subparsers.add_parser("commit", help="Generate AI commit message for staged changes and commit")
+    diff_ai_parser = ai_subparsers.add_parser("diff", help="Send AIVCS diff to Gemini and explain changes")
+    diff_ai_parser.add_argument("--staged", action="store_true", help="Explain staged changes instead of working tree")
+    explain_ai_parser = ai_subparsers.add_parser("explain", help="Explain current changes, a file, or commit")
+    explain_ai_parser.add_argument("target", nargs="?", default=None, help="File, commit hash, or branch to explain")
+    ai_subparsers.add_parser("status", help="Summarize repository state and health using AI")
+    search_ai_parser = ai_subparsers.add_parser("search", help="Search commit history using natural language")
+    search_ai_parser.add_argument("query", help="Natural language search query")
+    review_ai_parser = ai_subparsers.add_parser("review", help="Review code changes for bugs, security risks, and issues")
+    review_ai_parser.add_argument("--staged", action="store_true", help="Review staged changes instead of working tree")
+    fix_ai_parser = ai_subparsers.add_parser("fix", help="Analyze issues and propose fixes with interactive approval")
+    fix_ai_parser.add_argument("file", nargs="?", default=None, help="Target file to fix")
+    merge_ai_parser = ai_subparsers.add_parser("merge", help="Analyze merge conflicts and propose resolutions with approval")
+    merge_ai_parser.add_argument("branch", help="Source branch to merge into current branch")
+    ask_ai_parser = ai_subparsers.add_parser("ask", help="Ask the AI assistant a question or request action")
+    ask_ai_parser.add_argument("prompt", nargs="+", help="Question or prompt for the AI assistant")
+
     branch_parser = subparsers.add_parser("branch")
     branch_parser.add_argument("name", nargs="?")
     switch_parser = subparsers.add_parser("switch")
     switch_parser.add_argument("name")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         if args.command == "init": command_init()
         elif args.command == "add": print("Staged:\n  " + "\n  ".join(add(find_root(), args.paths)))
@@ -223,6 +311,27 @@ def main() -> None:
         elif args.command == "pull": command_pull(args.branch, args.repository)
         elif args.command == "clone":
             command_clone(args.repository, args.destination)
+        elif args.command == "ai":
+            if args.ai_command == "commit":
+                command_ai_commit()
+            elif args.ai_command == "diff":
+                command_ai_diff(args.staged)
+            elif args.ai_command == "explain":
+                command_ai_explain(args.target)
+            elif args.ai_command == "status":
+                command_ai_status()
+            elif args.ai_command == "search":
+                command_ai_search(args.query)
+            elif args.ai_command == "review":
+                command_ai_review(args.staged)
+            elif args.ai_command == "fix":
+                command_ai_fix(args.file)
+            elif args.ai_command == "merge":
+                command_ai_merge(args.branch)
+            elif args.ai_command == "ask":
+                command_ai_assistant(" ".join(args.prompt) if args.prompt else None)
+            else:
+                command_ai_assistant()
         elif args.command == "branch": command_branch(args.name)
         elif args.command == "switch": command_switch(args.name)
     except (RuntimeError, FileNotFoundError) as error:
