@@ -7,6 +7,10 @@ name = "aivcs"
 version = "0.1.0"
 description = "A small, educational AI-native version control core"
 requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "google-genai>=2.0.0",
+]
 
 [project.scripts]
 aivcs = "aivcs.cli:main"
