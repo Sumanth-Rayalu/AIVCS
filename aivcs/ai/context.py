@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import fnmatch
 import json
 from pathlib import Path
 from typing import Any
@@ -290,3 +291,215 @@ def build_repo_overview_context(root: Path) -> dict[str, Any]:
         "status": repo_status,
         "branches": branch_names(root),
     }
+
+
+FORBIDDEN_SENSITIVE_PATTERNS = {
+    ".env", ".env.*", "*.env", "*credential*", "*secret*", "*token*", "*password*",
+    "*.pem", "*.key", "*.crt", "*.pfx", "*.p12",
+    ".aivcs*", ".git*", "__pycache__*", "node_modules*",
+    "*.tmp", "*.temp", "*.bak", "*.swp"
+}
+
+
+def load_gitignore(root: Path) -> list[tuple[bool, str]]:
+    gi_path = root / ".gitignore"
+    if not gi_path.is_file():
+        return []
+    rules: list[tuple[bool, str]] = []
+    try:
+        content = gi_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        if negated:
+            line = line[1:].strip()
+        rules.append((negated, line))
+    return rules
+
+
+def is_ignored_path(rel_path: str, rules: list[tuple[bool, str]]) -> bool:
+    rel_path = rel_path.replace("\\", "/").strip("/")
+    parts = rel_path.split("/")
+    ignored = False
+    for negated, pattern in rules:
+        pattern = pattern.strip("/")
+        if not pattern:
+            continue
+        if "/" in pattern:
+            if (
+                fnmatch.fnmatch(rel_path, pattern)
+                or fnmatch.fnmatch(rel_path, f"{pattern}/*")
+                or fnmatch.fnmatch(rel_path, f"*/{pattern}")
+                or fnmatch.fnmatch(rel_path, f"*/{pattern}/*")
+            ):
+                ignored = not negated
+        else:
+            if (
+                fnmatch.fnmatch(parts[-1], pattern)
+                or any(fnmatch.fnmatch(p, pattern) for p in parts)
+                or fnmatch.fnmatch(rel_path, f"*{pattern}*")
+            ):
+                ignored = not negated
+    return ignored
+
+
+def is_sensitive_path(rel_path: str) -> bool:
+    rel_path = rel_path.replace("\\", "/").strip("/")
+    parts = rel_path.split("/")
+    filename = parts[-1].lower()
+    for pattern in FORBIDDEN_SENSITIVE_PATTERNS:
+        if fnmatch.fnmatch(filename, pattern) or fnmatch.fnmatch(rel_path.lower(), pattern):
+            return True
+    return False
+
+
+def get_remote_sync_state(root: Path) -> dict[str, Any]:
+    try:
+        from ..config import remote_config
+        from ..remote import _fetch_repository
+        config = remote_config()
+        if not config.get("username") or not config.get("email") or not config.get("repo"):
+            return {"is_configured": False, "status": "unconfigured"}
+
+        try:
+            repo_data = _fetch_repository(config, config["repo"])
+        except Exception as e:
+            return {
+                "is_configured": True,
+                "reachable": False,
+                "repo": config["repo"],
+                "backend_url": config.get("backend_url", ""),
+                "error": str(e),
+                "status": "unreachable",
+            }
+
+        curr_branch = current_branch(root) or "main"
+        remote_branches = repo_data.get("branches", [])
+        remote_branch = next((b for b in remote_branches if b.get("branchName") == curr_branch), None)
+
+        local_head = head_id(root)
+        if not remote_branch:
+            local_commits = history(root, local_head) if local_head else []
+            return {
+                "is_configured": True,
+                "reachable": True,
+                "repo": config["repo"],
+                "branch": curr_branch,
+                "remote_head": None,
+                "local_head": local_head[:7] if local_head else None,
+                "ahead_count": len(local_commits),
+                "behind_count": 0,
+                "status": "new_branch",
+            }
+
+        remote_head = remote_branch.get("headCommitId")
+        if local_head == remote_head:
+            return {
+                "is_configured": True,
+                "reachable": True,
+                "repo": config["repo"],
+                "branch": curr_branch,
+                "remote_head": remote_head[:7] if remote_head else None,
+                "local_head": local_head[:7] if local_head else None,
+                "ahead_count": 0,
+                "behind_count": 0,
+                "status": "up_to_date",
+            }
+
+        local_commits = history(root, local_head) if local_head else []
+        local_ids = [c["id"] for c in local_commits]
+        remote_commits = [c.get("commitId") for c in remote_branch.get("commits", [])]
+
+        if remote_head in local_ids:
+            ahead_by = local_ids.index(remote_head)
+            return {
+                "is_configured": True,
+                "reachable": True,
+                "repo": config["repo"],
+                "branch": curr_branch,
+                "remote_head": remote_head[:7] if remote_head else None,
+                "local_head": local_head[:7] if local_head else None,
+                "ahead_count": ahead_by,
+                "behind_count": 0,
+                "status": "ahead",
+            }
+        elif local_head in remote_commits:
+            behind_by = len(remote_commits) - 1 - remote_commits.index(local_head)
+            return {
+                "is_configured": True,
+                "reachable": True,
+                "repo": config["repo"],
+                "branch": curr_branch,
+                "remote_head": remote_head[:7] if remote_head else None,
+                "local_head": local_head[:7] if local_head else None,
+                "ahead_count": 0,
+                "behind_count": behind_by,
+                "status": "behind",
+            }
+        else:
+            return {
+                "is_configured": True,
+                "reachable": True,
+                "repo": config["repo"],
+                "branch": curr_branch,
+                "remote_head": remote_head[:7] if remote_head else None,
+                "local_head": local_head[:7] if local_head else None,
+                "ahead_count": len(local_commits),
+                "behind_count": len(remote_commits),
+                "status": "diverged",
+            }
+    except Exception as exc:
+        return {"is_configured": False, "status": "error", "error": str(exc)}
+
+
+def build_autonomous_context(root: Path) -> dict[str, Any]:
+    root = root.resolve()
+    rules = load_gitignore(root)
+    repo_status = status(root)
+
+    clean_untracked = []
+    ignored_untracked = []
+    for p in repo_status["untracked"]:
+        if is_sensitive_path(p) or is_ignored_path(p, rules):
+            ignored_untracked.append(p)
+        else:
+            clean_untracked.append(p)
+
+    staged_diff = build_diff(root, staged=True)
+    if len(staged_diff) > MAX_DIFF_CHARACTERS:
+        staged_diff = staged_diff[:MAX_DIFF_CHARACTERS] + "\n[staged diff truncated]"
+
+    working_diff = build_diff(root, staged=False)
+    if len(working_diff) > MAX_DIFF_CHARACTERS:
+        working_diff = working_diff[:MAX_DIFF_CHARACTERS] + "\n[working diff truncated]"
+
+    curr_head = head_id(root)
+    recent = [
+        {"id": c["id"][:7], "message": c["message"], "author": c.get("author", ""), "timestamp": c.get("timestamp", "")}
+        for c in history(root)[:5]
+    ]
+
+    remote_state = get_remote_sync_state(root)
+    is_clean = not (repo_status["staged"] or repo_status["modified"] or repo_status["deleted"] or clean_untracked)
+
+    return {
+        "branch": current_branch(root) or "detached",
+        "head_commit": curr_head[:7] if curr_head else None,
+        "branches": branch_names(root),
+        "status": {
+            "staged": repo_status["staged"],
+            "modified": repo_status["modified"],
+            "deleted": repo_status["deleted"],
+            "untracked": clean_untracked,
+        },
+        "ignored_untracked_count": len(ignored_untracked),
+        "staged_diff": staged_diff,
+        "working_diff": working_diff,
+        "recent_commits": recent,
+        "remote_status": remote_state,
+        "is_clean": is_clean,
+    }

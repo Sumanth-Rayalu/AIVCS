@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -13,6 +15,27 @@ from .config import remote_config
 from .hashing import hash_bytes
 from .repository import BRANCHES_DIR, COMMITS_DIR, HEAD_FILE, OBJECTS_DIR, aivcs_path, head_id, write_json
 from .staging import load_index, status
+
+
+def _is_binary_bytes(content: bytes) -> bool:
+    if b"\x00" in content:
+        return True
+    try:
+        content.decode("utf-8")
+        return False
+    except UnicodeDecodeError:
+        return True
+
+
+def _detail_path(detail: dict[str, Any]) -> str:
+    path = detail.get("path")
+    if isinstance(path, str) and path.strip():
+        return path.replace("\\", "/").strip()
+    filename = str(detail.get("filename", "")).replace("\\", "/")
+    extension = str(detail.get("fileextension", ""))
+    if extension and not filename.endswith(extension):
+        return f"{filename}{extension}"
+    return filename
 
 
 def _require_identity() -> dict[str, str]:
@@ -37,15 +60,26 @@ def build_push_payload(root: Path, repository: str, branch: str | None = None) -
         files = []
         for filename, digest in commit["files"].items():
             content = aivcs_path(root, OBJECTS_DIR, digest).read_bytes()
-            try:
-                text = content.decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise RuntimeError(f"Cannot push binary file as JSON content: {filename}") from error
+            is_bin = _is_binary_bytes(content)
+            if is_bin:
+                encoded_content = base64.b64encode(content).decode("ascii")
+                encoding = "base64"
+            else:
+                encoded_content = content.decode("utf-8")
+                encoding = "utf-8"
+
+            path_posix = Path(filename).as_posix()
+            ext = Path(filename).suffix
+            stem = Path(filename).with_suffix("").as_posix() if ext else path_posix
+
             files.append({
-                "filename": str(Path(filename).with_suffix("")),
-                "fileextension": Path(filename).suffix,
-                "content": text,
+                "path": path_posix,
+                "filename": stem,
+                "fileextension": ext,
+                "content": encoded_content,
                 "contentHash": digest,
+                "encoding": encoding,
+                "is_binary": is_bin,
             })
         commits.append({
             "commitId": commit["id"],
@@ -158,17 +192,27 @@ def _write_remote_branch(root: Path, branch: dict) -> None:
         for detail in details:
             if not isinstance(detail, dict) or not isinstance(detail.get("content"), str):
                 raise RuntimeError(f"Remote commit '{commit['commitId']}' contains invalid file data.")
-            filename = detail.get("filename")
-            _safe_file_path(root, filename)
-            content = detail["content"].encode("utf-8")
-            actual_digest = hash_bytes(content)
+            rel_path = _detail_path(detail)
+            _safe_file_path(root, rel_path)
+
+            raw_content = detail["content"]
+            is_bin = bool(detail.get("is_binary")) or detail.get("encoding") == "base64"
+            if is_bin:
+                try:
+                    content_bytes = base64.b64decode(raw_content)
+                except Exception:
+                    content_bytes = raw_content.encode("utf-8")
+            else:
+                content_bytes = raw_content.encode("utf-8")
+
+            actual_digest = hash_bytes(content_bytes)
             digest = detail.get("contentHash")
-            if digest != actual_digest:
+            if not digest or digest != actual_digest:
                 digest = actual_digest
             object_path = aivcs_path(root, OBJECTS_DIR, digest)
             object_path.parent.mkdir(parents=True, exist_ok=True)
-            object_path.write_bytes(content)
-            files[filename] = digest
+            object_path.write_bytes(content_bytes)
+            files[rel_path] = digest
         commit_id = str(commit["commitId"])
         write_json(aivcs_path(root, COMMITS_DIR, f"{commit_id}.json"), {
             "id": commit_id,

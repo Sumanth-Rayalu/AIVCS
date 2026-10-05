@@ -4,11 +4,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aivcs.ai.agent import run_ai_commit
-from aivcs.ai.approval import confirm_commit
+from aivcs.ai.agent import run_ai_autonomous, run_ai_commit, validate_action_plan
+from aivcs.ai.approval import (
+    confirm_commit,
+    confirm_dangerous_operation,
+    confirm_pull,
+    confirm_push,
+)
 from aivcs.ai.context import build_commit_context
 from aivcs.ai.engine import generate_commit_message
-from aivcs.commits import history
+from aivcs.commits import create_commit, history
 from aivcs.repository import init_repository
 from aivcs.staging import add
 
@@ -169,3 +174,102 @@ class TestAiAgent(unittest.TestCase):
             self.assertIsNotNone(commit)
             self.assertEqual(commit["message"], "feat: add feature")
             self.assertEqual(len(history(root)), 1)
+
+
+class TestAutonomousAiAgent(unittest.TestCase):
+    def test_autonomous_clean_repo(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_repository(root)
+            output = []
+            # In clean repo, autonomous agent completes immediately without calling Gemini or user prompt
+            res = run_ai_autonomous(root, output_fn=output.append)
+            self.assertTrue(res)
+            self.assertTrue(any("Repository is clean." in line for line in output))
+            self.assertTrue(any("No action is required." in line for line in output))
+
+    @patch("aivcs.ai.agent.generate_text")
+    def test_autonomous_normal_workflow_no_confirmation_needed(self, mock_gen):
+        mock_gen.return_value = '{"summary": "Update auth logic", "actions": [{"action": "stage", "files": ["auth.py"]}, {"action": "commit", "message": "fix: correct authentication flow"}], "complete": false}'
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_repository(root)
+            (root / "auth.py").write_text("print('auth')\n", encoding="utf-8")
+
+            output = []
+            # Normal changes should stage and commit automatically without asking confirmation!
+            res = run_ai_autonomous(root, output_fn=output.append)
+            self.assertTrue(res)
+            self.assertTrue(any("fix: correct authentication flow" in line for line in output))
+            commits = history(root)
+            self.assertEqual(len(commits), 1)
+            self.assertEqual(commits[0]["message"], "fix: correct authentication flow")
+
+    def test_validate_action_plan_filters_sensitive_and_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_repository(root)
+            (root / ".gitignore").write_text("ignored.txt\n*.log\n", encoding="utf-8")
+            (root / ".env").write_text("SECRET=123\n", encoding="utf-8")
+            (root / "valid.py").write_text("print(1)\n", encoding="utf-8")
+            (root / "ignored.txt").write_text("skip\n", encoding="utf-8")
+
+            plan = {
+                "summary": "Staging",
+                "actions": [
+                    {"action": "stage", "files": [".env", "valid.py", "ignored.txt", ".aivcs/HEAD"]},
+                    {"action": "push", "remote": "origin", "branch": "main"},
+                ],
+            }
+            validated = validate_action_plan(plan, {"status": {"staged": [], "modified": [], "deleted": [], "untracked": []}}, root)
+            stage_act = next(a for a in validated["actions"] if a["action"] == "stage")
+            self.assertEqual(stage_act["files"], ["valid.py"])
+            self.assertFalse(stage_act["requires_approval"])
+
+            push_act = next(a for a in validated["actions"] if a["action"] == "push")
+            self.assertTrue(push_act["requires_approval"])
+
+    @patch("aivcs.ai.context.get_remote_sync_state", return_value={"is_configured": True, "status": "ahead", "ahead_count": 1, "repo": "origin"})
+    @patch("aivcs.ai.agent.generate_text")
+    def test_autonomous_push_requires_approval_rejected(self, mock_gen, _mock_remote):
+        mock_gen.return_value = '{"summary": "Push commits", "actions": [{"action": "push", "remote": "origin", "branch": "main"}], "complete": false}'
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_repository(root)
+            (root / "file.txt").write_text("data\n", encoding="utf-8")
+            add(root, ["file.txt"])
+            create_commit(root, "feat: initial commit")
+
+            output = []
+            # User rejects push
+            res = run_ai_autonomous(root, input_fn=lambda _: "n", output_fn=output.append)
+            self.assertTrue(res)
+            self.assertTrue(any("Push canceled by user." in line for line in output))
+
+    def test_confirm_dangerous_operation_defaults_to_no(self):
+        output = []
+        # Pressing Enter on dangerous operation defaults to False
+        res = confirm_dangerous_operation("reset", "HEAD~1", "Discards commits", input_fn=lambda _: "", output_fn=output.append)
+        self.assertFalse(res)
+
+    @patch("aivcs.ai.agent.generate_text")
+    def test_autonomous_post_action_summary_generated(self, mock_gen):
+        mock_gen.return_value = '{"summary": "Changes ready", "actions": [{"action": "stage", "files": ["autonomous-test.txt"]}, {"action": "commit", "message": "test: add autonomous test file"}], "complete": false}'
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_repository(root)
+            (root / "autonomous-test.txt").write_text("Autonomous AIVCS test\n", encoding="utf-8")
+
+            output = []
+            res = run_ai_autonomous(root, output_fn=output.append)
+            self.assertTrue(res)
+            combined_output = "\n".join(output)
+            self.assertIn("AI ACTIVITY SUMMARY", combined_output)
+            self.assertIn("What I did:", combined_output)
+            self.assertIn("What changed:", combined_output)
+            self.assertIn("Difference from previous state:", combined_output)
+            self.assertIn("Effect:", combined_output)
+            self.assertIn("Final state:", combined_output)
+            self.assertIn("autonomous-test.txt", combined_output)
+
+

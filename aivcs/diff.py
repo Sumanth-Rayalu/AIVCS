@@ -12,7 +12,15 @@ def object_text(root: Path, digest: str | None) -> str:
     if not digest:
         return ""
     path = aivcs_path(root, "objects", digest)
-    return path.read_text(encoding="utf-8") if path.exists() else ""
+    if not path.exists():
+        return ""
+    try:
+        raw = path.read_bytes()
+        if b"\0" in raw:
+            return "[binary content]"
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return "[binary content]"
 
 
 def build_diff(root: Path, staged: bool = False) -> str:

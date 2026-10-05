@@ -7,6 +7,7 @@ from urllib.parse import unquote, urlsplit
 
 from .ai.agent import (
     run_ai_assistant,
+    run_ai_autonomous,
     run_ai_commit,
     run_ai_diff,
     run_ai_explain,
@@ -217,6 +218,10 @@ def command_ai_assistant(prompt: str | None = None) -> None:
     run_ai_assistant(find_root(), prompt=prompt)
 
 
+def command_ai_autonomous() -> None:
+    run_ai_autonomous(find_root())
+
+
 def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
@@ -266,7 +271,7 @@ def main(argv: list[str] | None = None) -> None:
     clone_parser.add_argument("repository", nargs="?", default=None)
     clone_parser.add_argument("destination", nargs="?", default=None)
 
-    ai_parser = subparsers.add_parser("ai", help="AI assistant and intelligence tools")
+    ai_parser = subparsers.add_parser("ai", help="Autonomous AI repository agent and intelligence tools")
     ai_subparsers = ai_parser.add_subparsers(dest="ai_command")
     ai_subparsers.add_parser("commit", help="Generate AI commit message for staged changes and commit")
     diff_ai_parser = ai_subparsers.add_parser("diff", help="Send AIVCS diff to Gemini and explain changes")
@@ -331,7 +336,7 @@ def main(argv: list[str] | None = None) -> None:
             elif args.ai_command == "ask":
                 command_ai_assistant(" ".join(args.prompt) if args.prompt else None)
             else:
-                command_ai_assistant()
+                command_ai_autonomous()
         elif args.command == "branch": command_branch(args.name)
         elif args.command == "switch": command_switch(args.name)
     except (RuntimeError, FileNotFoundError) as error:
